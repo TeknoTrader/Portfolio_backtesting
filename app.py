@@ -9,6 +9,7 @@ delle strategie si sommano o si compensano.
 """
 
 from __future__ import annotations
+import html as _html
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -116,7 +117,7 @@ with st.sidebar:
 st.title("Portfolio Lab")
 
 reports = st.session_state.reports
-usable = [r for r in reports.values()
+usable = [(fn, r) for fn, r in reports.items()
           if r["enabled"] and r["parsed"].warning is None and len(r["parsed"].trades)]
 
 if not usable:
@@ -126,18 +127,37 @@ if not usable:
     st.stop()
 
 # intervallo temporale complessivo e filtro periodo
-all_times = pd.concat([r["parsed"].trades.time for r in usable])
+all_times = pd.concat([r["parsed"].trades.time for _, r in usable])
 tmin, tmax = all_times.min().date(), all_times.max().date()
 dr = st.slider("Periodo analizzato", min_value=tmin, max_value=tmax,
                value=(tmin, tmax), format="DD.MM.YYYY")
 d_from = pd.Timestamp(dr[0])
 d_to = pd.Timestamp(dr[1]) + pd.Timedelta(days=1)
 
+
+def unique_names(items):
+    # nomi di visualizzazione univoci: al primo duplicato si aggancia il filename
+    seen, out = {}, []
+    for fn, r in items:
+        base = r["parsed"].name or fn.rsplit(".", 1)[0]
+        nm = base
+        if nm in seen:
+            nm = f"{base} · {fn.rsplit('.', 1)[0][:18]}"
+        while nm in seen:
+            seen[base] += 1
+            nm = f"{base} ({seen[base]})"
+        seen.setdefault(base, 1)
+        seen[nm] = 1
+        out.append(nm)
+    return out
+
+
+disp_names = unique_names(usable)
 strategies = []
-for r in usable:
+for (fn, r), nm in zip(usable, disp_names):
     p = r["parsed"]
     tr = p.trades[(p.trades.time >= d_from) & (p.trades.time < d_to)]
-    strategies.append(Strategy(p.name, tr.reset_index(drop=True), r["weight"], r["color"]))
+    strategies.append(Strategy(nm, tr.reset_index(drop=True), r["weight"], r["color"]))
 
 model = build_model(strategies, cap)
 if model is None:
@@ -233,29 +253,32 @@ st.plotly_chart(fig_uw, use_container_width=True)
 # ---------------------------------------------------------------- sovrapposizione dd
 
 st.subheader("Sovrapposizione dei drawdown")
-st.caption("Ogni riga è una strategia; l'intensità indica la profondità relativa "
-           "del drawdown in quel momento. Le colonne rosse più fitte segnalano i "
+st.caption("Scala comune a tutte le righe: colore più scuro = drawdown più "
+           "profondo (in % sul picco). Colonne scure allineate su più righe = "
            "periodi in cui più strategie soffrono insieme.")
 
 rows_lbl = m.strat_names + ["PORTAFOGLIO"]
 dd_stack = m.strat_dd + [m.port_dd]
-worst = [min(sd.min(), -1e-9) for sd in dd_stack]
+gw = min(min(sd.min() for sd in dd_stack), -1e-9)   # peggior dd globale, %
 xt = x_axis()
+scale = [[0, "rgba(244,246,248,0.7)"], [1, DD_COL]]
 
 fig_band = go.Figure()
-for ri, (lbl, sd, w) in enumerate(zip(rows_lbl, dd_stack, worst)):
-    intens = np.clip(-sd / -w, 0, 1)          # 0 fuori dal dd, 1 al minimo
-    color = DD_COL if lbl == "PORTAFOGLIO" else m.strat_colors[ri]
+for ri, (lbl, sd) in enumerate(zip(rows_lbl, dd_stack)):
+    intens = np.clip(-sd / -gw, 0, 1)          # 0 fuori dal dd, 1 al peggior dd globale
+    last = ri == len(rows_lbl) - 1
     fig_band.add_trace(go.Heatmap(
         x=xt, y=[lbl], z=[intens],
-        colorscale=[[0, "rgba(0,0,0,0)"], [0.001, "rgba(240,240,240,0.5)"],
-                    [1, color]],
-        showscale=False, zmin=0, zmax=1, xgap=0, ygap=3,
+        colorscale=scale, zmin=0, zmax=1, xgap=0, ygap=3,
+        showscale=last,
+        colorbar=dict(title=dict(text="DD %", side="right"), thickness=12,
+                      len=0.9, tickvals=[0, 1],
+                      ticktext=["0%", f"{gw:.1f}%"]),
         hovertemplate=lbl + " %{x|%d.%m.%Y}<br>dd " +
                       "%{customdata:.2f}%<extra></extra>",
         customdata=[sd]))
 fig_band.update_layout(
-    height=90 + 34 * len(rows_lbl), template="plotly_white",
+    height=100 + 34 * len(rows_lbl), template="plotly_white",
     margin=dict(l=10, r=10, t=10, b=10),
     yaxis=dict(autorange="reversed"))
 st.plotly_chart(fig_band, use_container_width=True)
@@ -326,24 +349,49 @@ with c1:
 
 with c2:
     st.subheader("P/L mensile")
-    md = pd.DataFrame(m.monthly.T, index=m.months, columns=m.strat_names)
-    md["Portafoglio"] = m.monthly_port
-    md.index.name = "Mese"
-    vmax = abs(md.values).max() or 1.0
+    names_m = list(m.strat_names)
+    allv = np.concatenate([m.monthly.reshape(-1), m.monthly_port])
+    vmax = float(np.abs(allv).max()) or 1.0
 
-    def heat(v):
-        # gradiente verde/rosso proporzionale, senza matplotlib
+    def heat_css(v):
+        # gradiente verde/rosso proporzionale, senza pandas Styler
         t = max(-1.0, min(1.0, v / vmax))
         if t >= 0:
             r, g, b = int(233 - 212 * t), int(237 - 109 * t), int(241 - 180 * t)
         else:
             r, g, b = int(233 + 39 * t), int(237 + 39 * t), int(241 + 186 * t)
         fg = "#ffffff" if abs(t) > 0.55 else "#101720"
-        return f"background-color:rgb({r},{g},{b});color:{fg}"
+        return f"background:rgb({r},{g},{b});color:{fg}"
 
-    st.dataframe(
-        md.style.format("{:,.0f}").map(heat),
-        use_container_width=True, height=110 + 46 * len(m.strat_names))
+    heads = ["Mese"] + names_m + ["Portafoglio"]
+    thead = "".join(f"<th>{_html.escape(str(h))}</th>" for h in heads)
+    body = []
+    for mi, mo in enumerate(m.months):
+        cells = [f'<td class="k">{_html.escape(str(mo))}</td>']
+        for j in range(len(names_m)):
+            v = m.monthly[j, mi]
+            cells.append(f'<td style="{heat_css(v)}">{v:,.0f}</td>')
+        vp = m.monthly_port[mi]
+        cells.append(f'<td style="{heat_css(vp)};font-weight:600">{vp:,.0f}</td>')
+        body.append("<tr>" + "".join(cells) + "</tr>")
+
+    table_html = (
+        '<div class="plwrap"><table class="pl">'
+        f'<thead><tr>{thead}</tr></thead>'
+        f'<tbody>{"".join(body)}</tbody></table></div>'
+        '<style>'
+        '.plwrap{max-height:520px;overflow:auto;border:1px solid #E1E6EB;border-radius:4px}'
+        '.pl{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;'
+        'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}'
+        '.pl th{position:sticky;top:0;background:#EEF1F5;color:#101720;font-weight:600;'
+        'text-align:right;padding:6px 8px;white-space:nowrap;border-bottom:1px solid #C4CCD4;z-index:1}'
+        '.pl td{text-align:right;padding:4px 8px;white-space:nowrap}'
+        '.pl th:first-child,.pl td.k{text-align:left;position:sticky;left:0;background:#F4F6F8;'
+        'font-weight:500;z-index:1}'
+        '.pl th:first-child{z-index:2}'
+        '</style>'
+    )
+    st.markdown(table_html, unsafe_allow_html=True)
 
 st.caption("Tutti i calcoli avvengono in locale nel tuo browser/sessione: "
            "nessun dato viene inviato all'esterno.")
