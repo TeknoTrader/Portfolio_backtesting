@@ -316,10 +316,20 @@ with c2:
     md = pd.DataFrame(m.monthly.T, index=m.months, columns=m.strat_names)
     md["Portafoglio"] = m.monthly_port
     md.index.name = "Mese"
+    vmax = abs(md.values).max() or 1.0
+
+    def heat(v):
+        # gradiente verde/rosso proporzionale, senza matplotlib
+        t = max(-1.0, min(1.0, v / vmax))
+        if t >= 0:
+            r, g, b = int(233 - 212 * t), int(237 - 109 * t), int(241 - 180 * t)
+        else:
+            r, g, b = int(233 + 39 * t), int(237 + 39 * t), int(241 + 186 * t)
+        fg = "#ffffff" if abs(t) > 0.55 else "#101720"
+        return f"background-color:rgb({r},{g},{b});color:{fg}"
+
     st.dataframe(
-        md.style.format("{:,.0f}").background_gradient(
-            cmap="RdYlGn", axis=None, vmin=-abs(md.values).max(),
-            vmax=abs(md.values).max()),
+        md.style.format("{:,.0f}").map(heat),
         use_container_width=True, height=110 + 46 * len(m.strat_names))
 
 st.caption("Tutti i calcoli avvengono in locale nel tuo browser/sessione: "
