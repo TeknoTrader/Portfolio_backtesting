@@ -14,8 +14,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from portfolio_lab.parsing import parse_report
-from portfolio_lab.metrics import Strategy, build_model
+from parsing import parse_report
+from metrics import Strategy, build_model
 
 PALETTE = ["#C2410C", "#0E7490", "#7C3AED", "#B45309", "#15803D",
            "#BE185D", "#0F766E", "#9333EA"]
