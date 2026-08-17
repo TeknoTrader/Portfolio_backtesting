@@ -16,6 +16,7 @@ import streamlit as st
 
 from parsing import parse_report
 from metrics import Strategy, build_model
+from pdf_report import build_pdf
 
 PALETTE = ["#C2410C", "#0E7490", "#7C3AED", "#B45309", "#15803D",
            "#BE185D", "#0F766E", "#9333EA"]
@@ -169,6 +170,18 @@ k[1].metric("Operazioni vincenti", f"{m.port_stats['win_rate']:.1f}%")
 k[2].metric("Tempo in drawdown", f"{port_dd_time:.1f}%")
 k[3].metric("DD simultanei", f"{overlap_pct:.1f}%",
             delta="due o piu insieme", delta_color="off")
+
+# esportazione PDF riassuntivo
+names = " + ".join(m.strat_names)
+subtitle = f"{names}  |  {dr[0]:%d.%m.%Y} - {dr[1]:%d.%m.%Y}"
+try:
+    pdf_bytes = build_pdf(m, cap, subtitle)
+    st.download_button(
+        "Scarica PDF riassuntivo", data=pdf_bytes,
+        file_name=f"portfolio_lab_{dr[1]:%Y%m%d}.pdf",
+        mime="application/pdf")
+except Exception as exc:
+    st.caption(f":red[PDF non disponibile: {exc}]")
 
 st.divider()
 
